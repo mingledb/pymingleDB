@@ -1,18 +1,18 @@
-# pymingleDB
+# pymingledb
 
 Lightweight file-based NoSQL engine — Python port of [mingleDB](https://github.com/marcuwynu23/mingleDB). Same format as the JavaScript and [gomingleDB](https://github.com/marcuwynu23/gomingleDB) implementations: BSON serialization, zlib compression, optional schema validation, query operators, and basic authentication.
 
 ## Install (uv)
 
 ```bash
-cd pymingleDB
+cd pymingledb
 uv sync
 ```
 
 Or add to your project:
 
 ```bash
-uv add pymingleDB
+uv add pymingledb
 ```
 
 ## Usage
