@@ -1,6 +1,6 @@
 # pymingledb
 
-Lightweight file-based NoSQL engine — Python port of [mingleDB](https://github.com/marcuwynu23/mingleDB). Same format as the JavaScript and [gomingleDB](https://github.com/marcuwynu23/gomingleDB) implementations: BSON serialization, zlib compression, optional schema validation, query operators, and basic authentication.
+Lightweight file-based NoSQL engine — Python port of [mingleDB](https://github.com/mingledb/mingleDB). Same format as the JavaScript and [gomingleDB](https://github.com/mingledb/gomingleDB) implementations: BSON serialization, zlib compression, optional schema validation, query operators, and basic authentication.
 
 ## Install (uv)
 
