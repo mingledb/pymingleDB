@@ -1,6 +1,6 @@
 [project]
 name = "pymingledb"
-version = "1.0.0"
+version = "1.0.1"
 description = "Lightweight file-based NoSQL engine (Python port of mingleDB). BSON + zlib, schema, query operators, auth."
 readme = "README.md"
 authors = [
