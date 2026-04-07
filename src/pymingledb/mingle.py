@@ -136,7 +136,7 @@ class MingleDB:
     and basic authentication (register_user / login / logout).
     """
 
-    def __init__(self, db_dir: str | Path = "./mydb") -> None:
+    def __init__(self, db_dir: str | Path = ".mgdb") -> None:
         self._db_dir = Path(db_dir)
         self._db_dir.mkdir(parents=True, exist_ok=True)
         self._schemas: dict[str, dict[str, Any]] = {}
