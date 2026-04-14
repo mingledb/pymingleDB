@@ -17,6 +17,7 @@ from bson import BSON
 
 HEADER = b"MINGLEDBv1"
 EXTENSION = ".mgdb"
+DEFAULT_DB_FILE = "database.mgdb"
 AUTH_COLLECTION = "_auth"
 
 
@@ -91,7 +92,9 @@ def _match_operators(doc_val: Any, op_map: dict[str, Any]) -> bool:
             if not any(_value_equal(doc_val, v) for v in op_val):
                 return False
         elif op == "$nin":
-            if isinstance(op_val, (list, tuple)) and any(_value_equal(doc_val, v) for v in op_val):
+            if isinstance(op_val, (list, tuple)) and any(
+                _value_equal(doc_val, v) for v in op_val
+            ):
                 return False
         elif op == "$regex":
             pattern = op_val if isinstance(op_val, str) else ""
@@ -137,32 +140,34 @@ class MingleDB:
     """
 
     def __init__(self, db_dir: str | Path = ".mgdb") -> None:
-        self._db_dir = Path(db_dir)
-        self._db_dir.mkdir(parents=True, exist_ok=True)
+        raw = str(db_dir or "").strip()
+        if not raw:
+            raw = DEFAULT_DB_FILE
+        if raw.lower().endswith(EXTENSION):
+            self._db_path = Path(raw)
+        else:
+            self._db_path = Path(raw) / DEFAULT_DB_FILE
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._schemas: dict[str, dict[str, Any]] = {}
         self._sessions: set[str] = set()
         self._lock = threading.RLock()
 
     def reset(self) -> None:
-        """Remove all .mgdb collection files and clear schemas and auth state."""
+        """Remove database file and clear schemas and auth state."""
         with self._lock:
-            if self._db_dir.exists():
-                for f in self._db_dir.iterdir():
-                    if f.is_file() and f.suffix == EXTENSION:
-                        f.unlink()
+            if self._db_path.exists():
+                self._db_path.unlink()
             self._schemas.clear()
             self._sessions.clear()
 
-    def _get_file_path(self, collection: str) -> Path:
-        return self._db_dir / f"{collection}{EXTENSION}"
-
-    def _init_collection_file(self, collection: str) -> None:
-        path = self._get_file_path(collection)
-        if path.exists():
+    def _ensure_database_file(self) -> None:
+        if self._db_path.exists():
             return
-        meta = json.dumps({"collection": collection}).encode("utf-8")
+        meta = json.dumps({"scope": "database", "format": "single-file-v2"}).encode(
+            "utf-8"
+        )
         meta_len = struct.pack("<I", len(meta))
-        path.write_bytes(HEADER + meta_len + meta)
+        self._db_path.write_bytes(HEADER + meta_len + meta)
 
     def _hash_password(self, password: str) -> str:
         return hashlib.sha256(password.encode("utf-8")).hexdigest()
@@ -201,7 +206,7 @@ class MingleDB:
     def register_user(self, username: str, password: str) -> None:
         """Register a user in _auth. Raises UsernameExistsError if username exists."""
         with self._lock:
-            self._init_collection_file(AUTH_COLLECTION)
+            self._ensure_database_file()
             users = self._find_all_locked(AUTH_COLLECTION)
             for u in users:
                 if u.get("username") == username:
@@ -231,33 +236,40 @@ class MingleDB:
         self._sessions.discard(username)
 
     def _insert_one_locked(self, collection: str, doc: dict[str, Any]) -> None:
-        raw = BSON.encode(doc)
+        raw = BSON.encode({"collection": collection, "doc": doc})
         compressed = zlib.compress(raw)
         length = struct.pack("<I", len(compressed))
-        path = self._get_file_path(collection)
-        with open(path, "ab") as f:
+        with open(self._db_path, "ab") as f:
             f.write(length + compressed)
 
     def insert_one(self, collection: str, doc: dict[str, Any]) -> None:
         """Append one document. Validates schema if defined."""
         with self._lock:
-            self._init_collection_file(collection)
+            self._ensure_database_file()
             self._validate_schema(collection, doc)
             self._insert_one_locked(collection, doc)
 
-    def _find_all_locked(self, collection: str) -> list[dict[str, Any]]:
-        path = self._get_file_path(collection)
-        if not path.exists():
+    def _read_all_records_locked(self) -> list[dict[str, Any]]:
+        if not self._db_path.exists():
             return []
-        data = path.read_bytes()
+        data = self._db_path.read_bytes()
         if len(data) < len(HEADER) + 4:
             return []
         if data[: len(HEADER)] != HEADER:
             raise MingleDBError("Invalid mingleDB file header.")
         offset = len(HEADER)
         (meta_len,) = struct.unpack("<I", data[offset : offset + 4])
-        offset += 4 + meta_len
-        docs = []
+        offset += 4
+        meta_end = offset + meta_len
+        if meta_end > len(data):
+            return []
+        meta = json.loads(data[offset:meta_end].decode("utf-8") or "{}")
+        legacy_collection = (
+            meta.get("collection") if isinstance(meta.get("collection"), str) else ""
+        )
+        offset = meta_end
+
+        records = []
         while offset + 4 <= len(data):
             (doc_len,) = struct.unpack("<I", data[offset : offset + 4])
             offset += 4
@@ -266,9 +278,20 @@ class MingleDB:
             compressed = data[offset : offset + doc_len]
             offset += doc_len
             raw = zlib.decompress(compressed)
-            doc = BSON.decode(raw)
-            docs.append(doc)
-        return docs
+            decoded = BSON.decode(raw)
+            if (
+                isinstance(decoded, dict)
+                and isinstance(decoded.get("collection"), str)
+                and isinstance(decoded.get("doc"), dict)
+            ):
+                records.append(decoded)
+            elif legacy_collection:
+                records.append({"collection": legacy_collection, "doc": decoded})
+        return records
+
+    def _find_all_locked(self, collection: str) -> list[dict[str, Any]]:
+        records = self._read_all_records_locked()
+        return [r["doc"] for r in records if r.get("collection") == collection]
 
     def find_all(self, collection: str) -> list[dict[str, Any]]:
         """Return all documents in the collection."""
@@ -295,19 +318,26 @@ class MingleDB:
         found = self.find(collection, filter or {})
         return found[0] if found else None
 
-    def _rewrite_collection_locked(
-        self, collection: str, docs: list[dict[str, Any]]
-    ) -> None:
-        meta = json.dumps({"collection": collection}).encode("utf-8")
+    def _write_all_records_locked(self, records: list[dict[str, Any]]) -> None:
+        meta = json.dumps({"scope": "database", "format": "single-file-v2"}).encode(
+            "utf-8"
+        )
         meta_len = struct.pack("<I", len(meta))
         body = bytearray()
-        for doc in docs:
-            raw = BSON.encode(doc)
+        for record in records:
+            raw = BSON.encode(record)
             compressed = zlib.compress(raw)
             body.extend(struct.pack("<I", len(compressed)))
             body.extend(compressed)
-        path = self._get_file_path(collection)
-        path.write_bytes(HEADER + meta_len + meta + bytes(body))
+        self._db_path.write_bytes(HEADER + meta_len + meta + bytes(body))
+
+    def _rewrite_collection_locked(
+        self, collection: str, docs: list[dict[str, Any]]
+    ) -> None:
+        records = self._read_all_records_locked()
+        retained = [r for r in records if r.get("collection") != collection]
+        retained.extend({"collection": collection, "doc": doc} for doc in docs)
+        self._write_all_records_locked(retained)
 
     def update_one(
         self,
