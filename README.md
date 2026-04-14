@@ -20,7 +20,8 @@ uv add pymingledb
 ```python
 from pymingledb import MingleDB, ValidationError, UsernameExistsError, AuthFailedError
 
-db = MingleDB("./mydb")  # or any path
+db = MingleDB("./mydb")  # directory -> ./mydb/database.mgdb
+# db = MingleDB("./mydb/app.mgdb")  # explicit single-file path
 
 # Schema (optional)
 db.define_schema("users", {
@@ -48,7 +49,7 @@ db.login("admin", "secure123")
 db.is_authenticated("admin")  # True
 db.logout("admin")
 
-# Reset (wipe all collections and schemas)
+# Reset (wipe database file and schemas)
 db.reset()
 ```
 
@@ -70,7 +71,7 @@ You can also pass a compiled `re.Pattern` as a filter value for regex match.
 
 ## File format
 
-Collections are stored as `<collection>.mgdb` files: header `MINGLEDBv1`, 4-byte meta length, JSON meta, then for each document: 4-byte length + zlib(BSON(doc)). Compatible with mingleDB (JS) and gomingleDB (Go).
+All collections are stored in one `.mgdb` database file, compatible with mingleDB (JS) and gomingleDB (Go). Internal file layout details are intentionally abstracted from user-facing docs.
 
 ## Tests
 
